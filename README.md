@@ -13,11 +13,10 @@ webp -> png
 
 使用： 
 
-执行 MD5 修改: md5
+执行 MD5 修改: flutter_modify_image md5
 
 执行无损压缩 :
-compress
-compress --type=png --quality=80
+flutter_modify_image compress --type=png --quality=80
 
 
 
