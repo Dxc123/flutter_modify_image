@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:collection';
+import 'dart:math';
 import 'package:image/image.dart';
 
 void main(List<String> args) async {
@@ -40,10 +41,75 @@ Future<void> modifyImagesMD5() async {
   logInfo('Found ${imageFiles.length} image files.');
 
   const maxConcurrentIsolates = 4;
-  await _processFilesWithIsolatePool(imageFiles, maxConcurrentIsolates, _processFileInIsolate);
+  await _processFilesWithIsolatePoolMD5(imageFiles, maxConcurrentIsolates, _processFileInIsolate);
 
   logSuccess('\nCompleted modifying MD5 for ${imageFiles.length} images.');
 }
+
+/// 使用 Isolate 池处理文件
+Future<void> _processFilesWithIsolatePoolMD5(
+  List<File> files,
+  int maxConcurrentIsolates,
+  Future<void> Function(File, StreamController<int>) isolateFunction,
+) async {
+  final pool = IsolatePool(maxConcurrentIsolates);
+  final progress = StreamController<int>();
+  int processedCount = 0;
+
+  // 监听进度更新
+  progress.stream.listen((count) {
+    processedCount += count;
+    _showProgress(processedCount, files.length);
+  });
+
+  // 向池中提交任务
+  for (final file in files) {
+    pool.submitTask(() async {
+      await isolateFunction(file, progress);
+    });
+  }
+
+  // 等待所有任务完成
+  await pool.close();
+  await progress.close();
+}
+
+/// 使用 Isolate 修改文件 MD5
+Future<void> _processFileInIsolate(File file, StreamController<int> progress) async {
+  final receivePort = ReceivePort();
+  final isolate = await Isolate.spawn(_isolateProcessFile, [file.path, receivePort.sendPort]);
+
+  await for (var message in receivePort) {
+    if (message == 'done') {
+      progress.add(1);
+      receivePort.close();
+      isolate.kill();
+      break;
+    }
+  }
+}
+
+/// Isolate 修改文件 MD5 的逻辑
+void _isolateProcessFile(List args) async {
+  final filePath = args[0] as String;
+  final sendPort = args[1] as SendPort;
+
+  try {
+    final file = File(filePath);
+
+    // 生成随机数据并追加到文件
+    final random = Random();
+    final randomBytes = List<int>.generate(8, (_) => random.nextInt(256));
+    await file.writeAsBytes(file.readAsBytesSync()..addAll(randomBytes));
+
+    sendPort.send('done');
+  } catch (e) {
+    logError('Failed to process file: $filePath. Error: $e');
+    sendPort.send('done');
+  }
+}
+
+////////////////////////////////////////////////////
 
 /// 无损压缩图片，支持压缩算法和质量设置
 Future<void> compressImages(List<String> args) async {
@@ -174,8 +240,8 @@ void _isolateCompressFile(List args) async {
 
 /// 解析压缩质量
 int _parseQuality(List<String> args, {int defaultValue = 80}) {
-  final qualityArg = args.firstWhere((arg) => arg.startsWith('--quality='), orElse: () => null);
-  if (qualityArg != null) {
+  final qualityArg = args.firstWhere((arg) => arg.startsWith('--quality='), orElse: () => "");
+  if (qualityArg.isNotEmpty) {
     final qualityValue = int.tryParse(qualityArg.split('=').last);
     if (qualityValue != null && qualityValue > 0 && qualityValue <= 100) {
       return qualityValue;
@@ -186,8 +252,8 @@ int _parseQuality(List<String> args, {int defaultValue = 80}) {
 
 /// 解析压缩类型
 String _parseCompressionType(List<String> args, {String defaultValue = 'png'}) {
-  final typeArg = args.firstWhere((arg) => arg.startsWith('--type='), orElse: () => null);
-  if (typeArg != null) {
+  final typeArg = args.firstWhere((arg) => arg.startsWith('--type='), orElse: () => "");
+  if (typeArg.isNotEmpty) {
     final typeValue = typeArg.split('=').last.toLowerCase();
     if (['png', 'jpg', 'jpeg'].contains(typeValue)) {
       return typeValue;
@@ -228,7 +294,7 @@ void logSuccess(String message) => print('\x1B[32m[SUCCESS] $message\x1B[0m');
 void logWarning(String message) => print('\x1B[33m[WARNING] $message\x1B[0m');
 void logError(String message) => print('\x1B[31m[ERROR] $message\x1B[0m');
 
-/// Isolate 池类
+/// Isolate 池类（与之前一致）
 class IsolatePool {
   final int maxConcurrentIsolates;
   final Queue<Function()> _taskQueue = Queue();
