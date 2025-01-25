@@ -106,6 +106,9 @@ Future<Map<String, dynamic>> _compressFileInIsolate(File file, StreamController<
     result['originalSize'] = originalSize;
     result['compressedSize'] = compressedSize;
     result['reason'] = ''; // 成功
+
+    // 添加日志输出，确保每次压缩任务完成后都能及时更新进度信息
+    logInfo('Compressed: ${file.path} | Original: ${_formatBytes(originalSize)} | Compressed: ${_formatBytes(compressedSize)} | Reduced: ${((1 - compressedSize / originalSize) * 100).toStringAsFixed(2)}%');
   } catch (e) {
     logError('Failed to compress file: ${file.path}. Error: $e');
     result['fileName'] = file.path;
