@@ -8,7 +8,7 @@ import 'package:crypto/crypto.dart';
 import 'log_untls.dart';
 
 /// 修改图片的 MD5
-Future<void> modifyImagesMD5() async {
+Future<void> imagesModifyMD5() async {
   final directoryPath = Directory.current.path;
   final directory = Directory(directoryPath);
 

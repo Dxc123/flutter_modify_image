@@ -3,10 +3,10 @@ import 'dart:async';
 import 'package:image/image.dart';
 
 import 'log_untls.dart';
-import 'modify_md5.dart';
+import 'image_modify_md5.dart';
 
 /// 无损压缩图片并输出日志，显示前后大小对比和进度条
-Future<void> compressImages() async {
+Future<void> imagesCompress() async {
   final directoryPath = Directory.current.path;
   final directory = Directory(directoryPath);
 
