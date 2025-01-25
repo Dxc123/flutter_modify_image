@@ -20,6 +20,8 @@ dart pub global activate -sgit https://github.com/Dxc123/flutter_modify_image.gi
 
 执行无损压缩: flutter_modify_image compress
 
+本地移除：dart pub global deactivate flutter_modify_image
+
 
 
   
