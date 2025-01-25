@@ -12,12 +12,13 @@ webp -> png
 
 
 
-使用： 
+使用： 安装到本地：(需要Flutter环境)
+
+dart pub global activate -sgit https://github.com/Dxc123/flutter_modify_image.git
 
 执行 MD5 修改: flutter_modify_image md5
 
-执行无损压缩 :
-flutter_modify_image compress
+执行无损压缩: flutter_modify_image compress
 
 
 
