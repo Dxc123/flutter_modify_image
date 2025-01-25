@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:image/image.dart';
-import 'package:flutter_image_compress/flutter_image_compress.dart';
 
 import 'log_untls.dart';
 
@@ -67,27 +66,23 @@ Future<Map<String, dynamic>> _compressFileInIsolate(File file, StreamController<
   final result = <String, dynamic>{};
   try {
     final originalSize = file.lengthSync();
+    final image = decodeImage(file.readAsBytesSync());
 
-    // 使用 flutter_image_compress 压缩
+    if (image == null) {
+      logError('Cannot decode image: $file. The image might be corrupted or in an unsupported format.');
+      result['fileName'] = file.path;
+      result['originalSize'] = originalSize;
+      result['compressedSize'] = originalSize;
+      result['reason'] = 'Corrupted or unsupported image format';
+      return result;
+    }
+
+    // 使用 PNG 或 JPEG 格式压缩
     List<int> compressedBytes;
     if (file.path.toLowerCase().endsWith('.png')) {
-      compressedBytes = (await FlutterImageCompress.compressWithFile(
-        file.path,
-        format: CompressFormat.png,
-        quality: 90,
-      ))!;
+      compressedBytes = encodePng(image, level: 9); // PNG 最大压缩级别
     } else if (file.path.toLowerCase().endsWith('.jpg') || file.path.toLowerCase().endsWith('.jpeg')) {
-      compressedBytes = (await FlutterImageCompress.compressWithFile(
-        file.path,
-        format: CompressFormat.jpeg,
-        quality: 85,
-      )) as List<int>;
-    } else if (file.path.toLowerCase().endsWith('.webp')) {
-      compressedBytes = (await FlutterImageCompress.compressWithFile(
-        file.path,
-        format: CompressFormat.webp,
-        quality: 80,
-      ))!;
+      compressedBytes = encodeJpg(image, quality: 85); // JPEG 质量
     } else {
       result['fileName'] = file.path;
       result['originalSize'] = originalSize;
@@ -96,7 +91,6 @@ Future<Map<String, dynamic>> _compressFileInIsolate(File file, StreamController<
       return result;
     }
 
-    // 将压缩后的字节写回文件
     await file.writeAsBytes(compressedBytes);
     final compressedSize = file.lengthSync();
     result['fileName'] = file.path;
@@ -134,7 +128,6 @@ String _formatBytes(int bytes) {
   return '${size.toStringAsFixed(2)} ${suffixes[i]}';
 }
 
-/// 显示所有文件的压缩前后对比
 void _showCompressionSummary(List<Map<String, dynamic>> fileStats) {
   logInfo('\n\n--- Compression Summary ---');
   num totalOriginalSize = 0;
