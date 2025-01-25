@@ -6,9 +6,9 @@ import 'package:flutter_modify_image/modify_md5.dart';
 void main(List<String> args) async {
   stdout.write('请输入命令 ("md5" 或 "compress") 执行操作：');
   final command = stdin.readLineSync()?.trim();
-  if (command == 'md5') {
+  if (command != null && command == 'md5') {
     await modifyImagesMD5();
-  } else if (command == 'compress') {
+  } else if (command != null && command.contains('compress')) {
     await compressImages(args);
   } else {
     logError('Invalid command. Use "md5" or "compress".');
