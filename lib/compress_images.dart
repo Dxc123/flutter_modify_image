@@ -1,15 +1,12 @@
-import 'dart:async';
 import 'dart:io';
-import 'dart:isolate';
-import 'dart:math';
-
+import 'dart:async';
 import 'package:image/image.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 
 import 'log_untls.dart';
-import 'modify_md5.dart';
 
-// 无损压缩图片，支持压缩算法和质量设置
-Future<void> compressImages(List<String> args) async {
+/// 无损压缩图片并输出日志，显示前后大小对比和进度条
+Future<void> compressImages() async {
   final directoryPath = Directory.current.path;
   final directory = Directory(directoryPath);
 
@@ -18,12 +15,7 @@ Future<void> compressImages(List<String> args) async {
     exit(1);
   }
 
-  // 解析参数
-  final quality = _parseQuality(args, defaultValue: 80);
-  final compressionType = _parseCompressionType(args, defaultValue: 'png');
-
   logInfo('Starting to compress all images in directory: $directoryPath');
-  logInfo('Using compression type: $compressionType with quality: $quality');
 
   final imageFiles = directory.listSync(recursive: true).whereType<File>().where((file) => _isImageFile(file.path)).toList();
 
@@ -34,135 +26,92 @@ Future<void> compressImages(List<String> args) async {
 
   logInfo('Found ${imageFiles.length} image files.');
 
-  const maxConcurrentIsolates = 4;
-  await _processFilesWithIsolatePool(
-    imageFiles,
-    maxConcurrentIsolates,
-    (file, progress) => _compressFileInIsolate(file, progress, quality, compressionType),
-  );
-
-  logSuccess('\nCompleted compressing ${imageFiles.length} images.');
-}
-
-/// 使用 Isolate 池处理文件
-Future<void> _processFilesWithIsolatePool(
-  List<File> files,
-  int maxConcurrentIsolates,
-  Future<void> Function(File, StreamController<Map<String, dynamic>>) isolateFunction,
-) async {
-  final pool = IsolatePool(maxConcurrentIsolates);
-  final progress = StreamController<Map<String, dynamic>>();
+  final List<Map<String, dynamic>> fileStats = [];
   int processedCount = 0;
+  final progress = StreamController<Map<String, dynamic>>();
 
+  // 显示进度条
   progress.stream.listen((data) {
     processedCount++;
     final fileName = data['fileName'];
     final originalSize = data['originalSize'];
     final compressedSize = data['compressedSize'];
-    final reason = data['reason'] ?? '';
-    final compressionRatio = compressedSize > 0 ? ((1 - compressedSize / originalSize) * 100).toStringAsFixed(2) : 'N/A';
+    final compressionRatio = ((1 - compressedSize / originalSize) * 100).toStringAsFixed(2);
 
-    if (compressedSize > 0) {
-      logInfo('[$processedCount/${files.length}] Compressed: $fileName | Original: ${_formatBytes(originalSize)} | Compressed: ${_formatBytes(compressedSize)} | Reduced: $compressionRatio%');
-    } else {
-      logWarning('[$processedCount/${files.length}] Skipped: $fileName | Reason: $reason | Size: ${_formatBytes(originalSize)}');
-    }
-    _showProgress(processedCount, files.length);
+    logInfo('[$processedCount/${imageFiles.length}] Compressed: $fileName | Original: ${_formatBytes(originalSize)} | Compressed: ${_formatBytes(compressedSize)} | Reduced: $compressionRatio%');
+    _showProgress(processedCount, imageFiles.length);
   });
 
-  for (final file in files) {
-    pool.submitTask(() async {
-      await isolateFunction(file, progress);
-    });
-  }
+  // 并发处理
+  await Future.wait(imageFiles.map((file) async {
+    final result = await _compressFileInIsolate(file, progress);
+    fileStats.add(result); // 保存每个文件的压缩统计
+  }));
 
-  await pool.close();
   await progress.close();
-}
 
-/// 使用 Isolate 压缩文件，输出详细日志
-Future<void> _compressFileInIsolate(File file, StreamController<Map<String, dynamic>> progress, int quality, String compressionType) async {
-  final receivePort = ReceivePort();
-  final isolate = await Isolate.spawn(_isolateCompressFile, [file.path, receivePort.sendPort, quality, compressionType]);
+  logSuccess('\nCompleted compressing ${imageFiles.length} images.');
 
-  await for (var message in receivePort) {
-    if (message is Map<String, dynamic>) {
-      progress.add(message);
-      receivePort.close();
-      isolate.kill();
-      break;
-    }
-  }
-}
-
-/// Isolate 压缩文件逻辑
-void _isolateCompressFile(List args) async {
-  final filePath = args[0] as String;
-  final sendPort = args[1] as SendPort;
-  final quality = args[2] as int;
-  final compressionType = args[3] as String;
-
-  try {
-    final file = File(filePath);
-    final originalSize = file.lengthSync();
-    final image = decodeImage(file.readAsBytesSync());
-
-    if (image == null) {
-      sendPort.send({'fileName': filePath, 'originalSize': originalSize, 'compressedSize': 0, 'reason': 'Unsupported format'});
-      return;
-    }
-
-    List<int> compressedBytes;
-    if (compressionType == 'png') {
-      compressedBytes = encodePng(image, level: max(0, 9 - (quality ~/ 10)));
-    } else if (compressionType == 'jpg' || compressionType == 'jpeg') {
-      compressedBytes = encodeJpg(image, quality: quality);
-    } else {
-      sendPort.send({'fileName': filePath, 'originalSize': originalSize, 'compressedSize': 0, 'reason': 'Invalid compression type'});
-      return;
-    }
-
-    if (compressedBytes.length >= originalSize) {
-      sendPort.send({'fileName': filePath, 'originalSize': originalSize, 'compressedSize': 0, 'reason': 'No significant size reduction'});
-      return;
-    }
-
-    await file.writeAsBytes(compressedBytes);
-    final compressedSize = file.lengthSync();
-    sendPort.send({'fileName': filePath, 'originalSize': originalSize, 'compressedSize': compressedSize});
-  } catch (e) {
-    sendPort.send({'fileName': filePath, 'originalSize': 0, 'compressedSize': 0, 'reason': e.toString()});
-  }
-}
-
-/// 解析压缩质量
-int _parseQuality(List<String> args, {int defaultValue = 80}) {
-  final qualityArg = args.firstWhere((arg) => arg.startsWith('--quality='), orElse: () => "");
-  if (qualityArg.isNotEmpty) {
-    final qualityValue = int.tryParse(qualityArg.split('=').last);
-    if (qualityValue != null && qualityValue > 0 && qualityValue <= 100) {
-      return qualityValue;
-    }
-  }
-  return defaultValue;
-}
-
-/// 解析压缩类型
-String _parseCompressionType(List<String> args, {String defaultValue = 'png'}) {
-  final typeArg = args.firstWhere((arg) => arg.startsWith('--type='), orElse: () => "");
-  if (typeArg.isNotEmpty) {
-    final typeValue = typeArg.split('=').last.toLowerCase();
-    if (['png', 'jpg', 'jpeg'].contains(typeValue)) {
-      return typeValue;
-    }
-  }
-  return defaultValue;
+  // 显示所有文件的压缩前后对比
+  _showCompressionSummary(fileStats);
 }
 
 /// 检查文件是否为图片
 bool _isImageFile(String path) {
   final imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp'];
   return imageExtensions.any((ext) => path.toLowerCase().endsWith(ext));
+}
+
+/// 无损压缩文件的逻辑
+Future<Map<String, dynamic>> _compressFileInIsolate(File file, StreamController<Map<String, dynamic>> progress) async {
+  final result = <String, dynamic>{};
+  try {
+    final originalSize = file.lengthSync();
+
+    // 使用 flutter_image_compress 压缩
+    List<int> compressedBytes;
+    if (file.path.toLowerCase().endsWith('.png')) {
+      compressedBytes = (await FlutterImageCompress.compressWithFile(
+        file.path,
+        format: CompressFormat.png,
+        quality: 90,
+      ))!;
+    } else if (file.path.toLowerCase().endsWith('.jpg') || file.path.toLowerCase().endsWith('.jpeg')) {
+      compressedBytes = (await FlutterImageCompress.compressWithFile(
+        file.path,
+        format: CompressFormat.jpeg,
+        quality: 85,
+      )) as List<int>;
+    } else if (file.path.toLowerCase().endsWith('.webp')) {
+      compressedBytes = (await FlutterImageCompress.compressWithFile(
+        file.path,
+        format: CompressFormat.webp,
+        quality: 80,
+      ))!;
+    } else {
+      result['fileName'] = file.path;
+      result['originalSize'] = originalSize;
+      result['compressedSize'] = originalSize;
+      result['reason'] = 'Not supported format for compression';
+      return result;
+    }
+
+    // 将压缩后的字节写回文件
+    await file.writeAsBytes(compressedBytes);
+    final compressedSize = file.lengthSync();
+    result['fileName'] = file.path;
+    result['originalSize'] = originalSize;
+    result['compressedSize'] = compressedSize;
+    result['reason'] = ''; // 成功
+  } catch (e) {
+    logError('Failed to compress file: ${file.path}. Error: $e');
+    result['fileName'] = file.path;
+    result['originalSize'] = 0;
+    result['compressedSize'] = 0;
+    result['reason'] = 'Error during compression, possibly due to file size or format issues';
+  }
+  progress.add(result);
+  return result;
 }
 
 /// 显示进度条
@@ -183,4 +132,30 @@ String _formatBytes(int bytes) {
   }
 
   return '${size.toStringAsFixed(2)} ${suffixes[i]}';
+}
+
+/// 显示所有文件的压缩前后对比
+void _showCompressionSummary(List<Map<String, dynamic>> fileStats) {
+  logInfo('\n\n--- Compression Summary ---');
+  num totalOriginalSize = 0;
+  num totalCompressedSize = 0;
+
+  for (var stat in fileStats) {
+    final fileName = stat['fileName'];
+    final originalSize = stat['originalSize'];
+    final compressedSize = stat['compressedSize'];
+    final reason = stat['reason'];
+
+    if (reason.isNotEmpty) {
+      logWarning('Skipped: $fileName | Reason: $reason');
+    } else {
+      totalOriginalSize += originalSize;
+      totalCompressedSize += compressedSize;
+      final compressionRatio = ((1 - compressedSize / originalSize) * 100).toStringAsFixed(2);
+      logInfo('$fileName: Original: ${_formatBytes(originalSize)} | Compressed: ${_formatBytes(compressedSize)} | Reduced: $compressionRatio%');
+    }
+  }
+
+  final totalReduction = ((1 - totalCompressedSize / totalOriginalSize) * 100).toStringAsFixed(2);
+  logSuccess('\nTotal: Original: ${_formatBytes(totalOriginalSize.toInt())} | Compressed: ${_formatBytes(totalCompressedSize.toInt())} | Total Reduced: $totalReduction%');
 }

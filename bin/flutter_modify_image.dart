@@ -8,8 +8,8 @@ void main(List<String> args) async {
   final command = stdin.readLineSync()?.trim();
   if (command != null && command == 'md5') {
     await modifyImagesMD5();
-  } else if (command != null && command.contains('compress')) {
-    await compressImages(args);
+  } else if (command == 'compress') {
+    await compressImages();
   } else {
     logError('Invalid command. Use "md5" or "compress".');
     exit(1);
