@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:image/image.dart';
 
 import 'log_untls.dart';
+import 'modify_md5.dart';
 
 /// 无损压缩图片并输出日志，显示前后大小对比和进度条
 Future<void> compressImages() async {
@@ -41,12 +42,20 @@ Future<void> compressImages() async {
     _showProgress(processedCount, imageFiles.length);
   });
 
-  // 并发处理
-  await Future.wait(imageFiles.map((file) async {
-    final result = await _compressFileInIsolate(file, progress);
-    fileStats.add(result); // 保存每个文件的压缩统计
-  }));
+  // 限制并发 Isolate 数量
+  const maxConcurrentIsolates = 4;
+  final pool = IsolatePool(maxConcurrentIsolates);
 
+  // 向池中提交任务
+  for (final file in imageFiles) {
+    pool.submitTask(() async {
+      final result = await _compressFileInIsolate(file, progress);
+      fileStats.add(result); // 保存每个文件的压缩统计
+    });
+  }
+
+  // 等待所有任务完成
+  await pool.close();
   await progress.close();
 
   logSuccess('\nCompleted compressing ${imageFiles.length} images.');
@@ -61,7 +70,7 @@ bool _isImageFile(String path) {
   return imageExtensions.any((ext) => path.toLowerCase().endsWith(ext));
 }
 
-/// 无损压缩文件的逻辑
+/// 使用 Isolate 处理单个文件
 Future<Map<String, dynamic>> _compressFileInIsolate(File file, StreamController<Map<String, dynamic>> progress) async {
   final result = <String, dynamic>{};
   try {
